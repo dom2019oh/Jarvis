@@ -27,8 +27,9 @@ start_time = time.time()
 async def on_ready():
     print(f"✅ Jarvis is online as {bot.user}")
     try:
+        # Force global sync (commands available in all servers)
         synced = await bot.tree.sync()
-        print(f"✅ Synced {len(synced)} slash commands")
+        print(f"✅ Globally synced {len(synced)} commands")
     except Exception as e:
         print(f"❌ Error syncing commands: {e}")
 
