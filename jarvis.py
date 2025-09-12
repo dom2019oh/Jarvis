@@ -28,6 +28,9 @@ start_time = time.time()
 # Store last channel for auto-updates
 last_role_channel = None
 
+# Track channels where Jarvis is "sleeping"
+sleeping_channels = set()
+
 # ------- Helpers -------
 async def ai_reply(system_prompt: str, user_prompt: str) -> str:
     if not oai:
@@ -42,10 +45,44 @@ async def ai_reply(system_prompt: str, user_prompt: str) -> str:
         )
         for item in resp.output:
             if item.type == "message":
-                return "".join([part.text for part in item.content if getattr(part, "type", "") == "output_text"]) or "✅ Done."
+                return "".join(
+                    [part.text for part in item.content if getattr(part, "type", "") == "output_text"]
+                ) or "✅ Done."
         return "✅ Done."
     except Exception as e:
         return f"❌ AI error: {e}"
+
+async def ai_intent_check(message: str) -> str:
+    """
+    Ask OpenAI whether this is a control command.
+    Returns: "sleep", "wake", or "chat"
+    """
+    if not oai:
+        return "chat"
+    try:
+        resp = oai.responses.create(
+            model=OPENAI_MODEL,
+            input=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a classifier. Decide if this message is telling Jarvis to "
+                        "'sleep' (stop replying), 'wake' (resume replying), or just 'chat'. "
+                        "Respond with only one word: sleep, wake, or chat."
+                    ),
+                },
+                {"role": "user", "content": message},
+            ],
+        )
+        for item in resp.output:
+            if item.type == "message":
+                result = "".join(
+                    [part.text for part in item.content if getattr(part, "type", "") == "output_text"]
+                )
+                return result.strip().lower()
+        return "chat"
+    except:
+        return "chat"
 
 def is_owner(user: discord.abc.User) -> bool:
     return user.id == OWNER_ID
@@ -65,14 +102,79 @@ async def on_ready():
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
+
+    # ---- Protocol Codes ----
+    if message.content.startswith("!protocol-"):
+        if not is_owner(message.author):
+            await message.reply("❌ Access denied. Protocols are restricted.")
+            return
+
+        code = message.content.lower().strip()
+
+        if code == "!protocol-01":
+            sleeping_channels.add(message.channel.id)
+            await message.reply("🛑 Protocol-01 engaged: Silent Mode activated in this channel.")
+            return
+
+        if code == "!protocol-02":
+            uptime_seconds = round(time.time() - start_time)
+            m, s = divmod(uptime_seconds, 60)
+            h, m = divmod(m, 60)
+            embed = discord.Embed(title="📊 Protocol-02: System Check", color=0xffcc00)
+            embed.add_field(name="Uptime", value=f"{h}h {m}m {s}s", inline=False)
+            embed.add_field(name="Servers", value=f"{len(bot.guilds)}", inline=True)
+            embed.add_field(name="Users", value=f"{len(bot.users)}", inline=True)
+            await message.reply(embed=embed)
+            return
+
+        if code == "!protocol-03":
+            await message.reply("🤖 Protocol-03: Greetings. I am J.A.R.V.I.S., Tony Stark's personal assistant.")
+            return
+
+        if code == "!protocol-99":
+            await message.reply("⚠️ Protocol-99 engaged: Shutting down system...")
+            await bot.close()
+            sys.exit(0)
+
+    # ---- Mention Handling (AI + Sleep/Wake) ----
     if bot.user and bot.user in message.mentions:
+        channel_id = message.channel.id
+        userq = message.clean_content.replace(f"@{bot.user.name}", "").strip()
+
+        # Always check intent when pinged
+        intent = await ai_intent_check(userq)
+
+        if intent == "sleep":
+            sleeping_channels.add(channel_id)
+            await message.reply("😴 Okay, I’ll stay quiet in this channel until you wake me up.")
+            return
+
+        if intent == "wake":
+            if channel_id in sleeping_channels:
+                sleeping_channels.remove(channel_id)
+                await message.reply("☀️ I’m awake again! Ready to assist.")
+            else:
+                await message.reply("✅ I’m already active here.")
+            return
+
+        # If channel is sleeping → ignore chat (unless wake-up intent above)
+        if channel_id in sleeping_channels:
+            return
+
+        # Otherwise respond normally
         async with message.channel.typing():
-            system = "You are Jarvis, a concise professional assistant for a GTA RP network. Be helpful, accurate, and brief."
-            userq = message.clean_content.replace(f"@{bot.user.name}", "").strip()
-            userq = userq if userq else "Say hello and explain how to use /ask."
-            reply = await ai_reply(system, userq)
+            system = "You are Jarvis, Tony Stark's AI assistant. Be professional, concise, and adapt your tone based on who you're talking to."
+            reply = await ai_reply(system, userq or "Say hello and explain how to use /ask.")
+
+            # Differentiate owner vs normal user
+            if is_owner(message.author):
+                reply = f"Yes, sir. {reply}"
+            else:
+                reply = f"{reply}\n\n💡 I am Tony Stark's personal assistant."
+
             reply = reply.replace("@everyone", "`@everyone`").replace("@here", "`@here`")
             await message.reply(reply[:1900])
+
     await bot.process_commands(message)
 
 # ------- Commands -------
