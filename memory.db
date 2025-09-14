@@ -1,0 +1,21 @@
+import aiosqlite
+
+async def init_db():
+    async with aiosqlite.connect("memory.db") as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                channel_id INTEGER,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                content TEXT
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_prefs (
+                user_id INTEGER PRIMARY KEY,
+                preferred_title TEXT,
+                style_notes TEXT
+            )
+        """)
+        await db.commit()
