@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import tempfile
+import sqlite3
 import discord
 import aiosqlite
 from discord.ext import commands, tasks
@@ -30,6 +31,18 @@ global_kill_switch = False  # protocol-1606
 
 DB_FILE = "memory.db"
 
+# ------- Database Reset Protection -------
+def reset_bad_db():
+    if os.path.exists(DB_FILE):
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            conn.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            conn.close()
+        except sqlite3.DatabaseError:
+            os.remove(DB_FILE)
+            print("⚠️ Corrupted DB detected. Deleted and will rebuild.")
+            print("✅ New memory.db initialized on next startup.")
+
 # ------- Database Setup -------
 async def init_db():
     async with aiosqlite.connect(DB_FILE) as db:
@@ -50,6 +63,7 @@ async def init_db():
             )
         """)
         await db.commit()
+    print("✅ Database initialized and ready.")
 
 async def save_memory(user_id: int, channel_id: int, content: str):
     async with aiosqlite.connect(DB_FILE) as db:
@@ -129,11 +143,12 @@ def is_owner(user: discord.abc.User) -> bool:
 # ------- Events -------
 @bot.event
 async def on_ready():
+    reset_bad_db()   # Auto-delete corrupted DBs
+    await init_db()
     await bot.change_presence(
         activity=discord.Activity(type=discord.ActivityType.watching, name="Stark Discoveries")
     )
     print(f"✅ Jarvis online as {bot.user}")
-    await init_db()
     try:
         synced = await bot.tree.sync()
         print(f"✅ Synced {len(synced)} commands")
@@ -147,7 +162,7 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # Global Kill Switch Reactivation
+    # Kill switch reactivation
     if global_kill_switch and ("tony stark" in message.content.lower() or "pepper" in message.content.lower()):
         global_kill_switch = False
         await message.channel.send("☀️ Override disengaged. Back online.")
@@ -155,7 +170,7 @@ async def on_message(message: discord.Message):
     if global_kill_switch:
         return
 
-    # Protocols
+    # Protocols (owner only)
     if message.content.startswith("!protocol-") and is_owner(message.author):
         code = message.content.lower().strip()
         if code == "!protocol-1606":
@@ -184,22 +199,22 @@ async def on_message(message: discord.Message):
             await bot.close()
             sys.exit(0)
 
-    # Confidentiality
+    # Confidential channels (skip replies)
     if any(x in message.channel.name.lower() for x in ["staff", "admin", "management"]):
         return
 
-    # Respond Logic
+    # Respond logic
     if bot.user in message.mentions or (message.channel.id not in sleeping_channels):
         userq = message.clean_content.replace(f"@{bot.user.name}", "").strip()
 
-        # Save to memory
+        # Save memory
         await save_memory(message.author.id, message.channel.id, f"{message.author.display_name}: {userq}")
 
-        # Fetch memory
+        # Get recent memory
         mem = await get_memory(message.channel.id)
         mem_text = "\n".join([f"{uid}: {c}" for uid, c in mem])
 
-        # Get preference
+        # Get user preference
         pref = await get_pref(message.author.id)
 
         system = (
@@ -219,7 +234,7 @@ async def on_message(message: discord.Message):
         reply = reply.replace("@everyone", "`@everyone`").replace("@here", "`@here`")
         await message.reply(reply[:1900])
 
-        # Speak if in VC
+        # Speak if connected to VC
         if message.guild.voice_client:
             await tts_speak(reply, message.guild.voice_client)
 
