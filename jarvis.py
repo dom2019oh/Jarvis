@@ -98,36 +98,26 @@ async def set_pref(user_id: int, title: str):
         )
         await db.commit()
 
-# ------- AI Streaming -------
-async def ai_stream_reply(system_prompt: str, user_prompt: str, channel: discord.TextChannel):
-    """Streams a reply to Discord message-by-message"""
+# ------- AI Normal Reply -------
+async def ai_reply(system_prompt: str, user_prompt: str) -> str:
     if not oai:
-        return await channel.send("⚠️ OpenAI not configured.")
-
+        return "⚠️ OpenAI not configured. Add OPENAI_API_KEY."
     try:
-        # Send a placeholder first
-        msg = await channel.send("💬 ...")
-
-        stream = oai.chat.completions.create(
+        resp = oai.responses.create(
             model=OPENAI_MODEL,
-            messages=[
+            input=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            stream=True,
         )
-
-        full_reply = ""
-        async for chunk in stream:
-            delta = chunk.choices[0].delta.content or ""
-            if delta:
-                full_reply += delta
-                await msg.edit(content=full_reply[:1900])
-
-        return full_reply
+        for item in resp.output:
+            if item.type == "message":
+                return "".join(
+                    [part.text for part in item.content if getattr(part, "type", "") == "output_text"]
+                ) or "✅ Done."
+        return "✅ Done."
     except Exception as e:
-        await channel.send(f"❌ AI error: {e}")
-        return None
+        return f"❌ AI error: {e}"
 
 # ------- TTS -------
 async def tts_speak(text: str, vc: discord.VoiceClient):
@@ -211,7 +201,7 @@ async def on_message(message: discord.Message):
             await bot.close()
             sys.exit(0)
 
-    # Confidential channels (skip replies)
+    # Confidential channels
     if any(x in message.channel.name.lower() for x in ["staff", "admin", "management"]):
         return
 
@@ -221,6 +211,20 @@ async def on_message(message: discord.Message):
     # Respond logic (ping or keyword for owner)
     if bot.user in message.mentions or owner_trigger:
         userq = message.clean_content.replace(f"@{bot.user.name}", "").strip()
+
+        # VC join/leave detection
+        if is_owner(message.author):
+            if "join my vc" in content_lower:
+                if message.author.voice and message.author.voice.channel:
+                    channel = message.author.voice.channel
+                    await channel.connect()
+                    await message.reply("🎙️ Joining your VC, sir.")
+                    return
+            if "leave vc" in content_lower:
+                if message.guild.voice_client:
+                    await message.guild.voice_client.disconnect()
+                    await message.reply("👋 Leaving VC, sir.")
+                    return
 
         # Save memory
         await save_memory(message.author.id, message.channel.id, f"{message.author.display_name}: {userq}")
@@ -237,9 +241,20 @@ async def on_message(message: discord.Message):
             "Be professional, witty, concise. Use memory context. "
             "Never expose confidential info."
         )
-        reply = await ai_stream_reply(system, f"Memory:\n{mem_text}\n\nUser: {userq}", message.channel)
+        reply = await ai_reply(system, f"Memory:\n{mem_text}\n\nUser: {userq}")
 
-        if reply and message.guild.voice_client:
+        if is_owner(message.author):
+            reply = f"Yes, sir. {reply}"
+        elif pref:
+            reply = f"Yes, {pref}. {reply}"
+        else:
+            reply = f"{reply}\n\n💡 I am Tony Stark's personal assistant."
+
+        reply = reply.replace("@everyone", "`@everyone`").replace("@here", "`@here`")
+        await message.reply(reply[:1900])
+
+        # Speak if connected to VC
+        if message.guild.voice_client:
             await tts_speak(reply, message.guild.voice_client)
 
     await bot.process_commands(message)
