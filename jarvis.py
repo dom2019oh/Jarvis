@@ -41,7 +41,6 @@ def reset_bad_db():
         except sqlite3.DatabaseError:
             os.remove(DB_FILE)
             print("⚠️ Corrupted DB detected. Deleted and will rebuild.")
-            print("✅ New memory.db initialized on next startup.")
 
 # ------- Database Setup -------
 async def init_db():
@@ -99,27 +98,38 @@ async def set_pref(user_id: int, title: str):
         )
         await db.commit()
 
-# ------- AI + TTS -------
-async def ai_reply(system_prompt: str, user_prompt: str) -> str:
+# ------- AI Streaming -------
+async def ai_stream_reply(system_prompt: str, user_prompt: str, channel: discord.TextChannel):
+    """Streams a reply to Discord message-by-message"""
     if not oai:
-        return "⚠️ OpenAI not configured. Add OPENAI_API_KEY."
+        return await channel.send("⚠️ OpenAI not configured.")
+
     try:
-        resp = oai.responses.create(
+        # Send a placeholder first
+        msg = await channel.send("💬 ...")
+
+        stream = oai.chat.completions.create(
             model=OPENAI_MODEL,
-            input=[
+            messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
+            stream=True,
         )
-        for item in resp.output:
-            if item.type == "message":
-                return "".join(
-                    [part.text for part in item.content if getattr(part, "type", "") == "output_text"]
-                ) or "✅ Done."
-        return "✅ Done."
-    except Exception as e:
-        return f"❌ AI error: {e}"
 
+        full_reply = ""
+        async for chunk in stream:
+            delta = chunk.choices[0].delta.content or ""
+            if delta:
+                full_reply += delta
+                await msg.edit(content=full_reply[:1900])
+
+        return full_reply
+    except Exception as e:
+        await channel.send(f"❌ AI error: {e}")
+        return None
+
+# ------- TTS -------
 async def tts_speak(text: str, vc: discord.VoiceClient):
     if not oai or not vc or not vc.is_connected():
         return
@@ -143,7 +153,7 @@ def is_owner(user: discord.abc.User) -> bool:
 # ------- Events -------
 @bot.event
 async def on_ready():
-    reset_bad_db()   # Auto-delete corrupted DBs
+    reset_bad_db()
     await init_db()
     await bot.change_presence(
         activity=discord.Activity(type=discord.ActivityType.watching, name="Stark Discoveries")
@@ -162,15 +172,17 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
+    content_lower = message.content.lower()
+
     # Kill switch reactivation
-    if global_kill_switch and ("tony stark" in message.content.lower() or "pepper" in message.content.lower()):
+    if global_kill_switch and ("tony stark" in content_lower or "pepper" in content_lower):
         global_kill_switch = False
         await message.channel.send("☀️ Override disengaged. Back online.")
         return
     if global_kill_switch:
         return
 
-    # Protocols (owner only)
+    # Protocols
     if message.content.startswith("!protocol-") and is_owner(message.author):
         code = message.content.lower().strip()
         if code == "!protocol-1606":
@@ -203,18 +215,21 @@ async def on_message(message: discord.Message):
     if any(x in message.channel.name.lower() for x in ["staff", "admin", "management"]):
         return
 
-    # Respond logic
-    if bot.user in message.mentions or (message.channel.id not in sleeping_channels):
+    # --- Owner special trigger ---
+    owner_trigger = is_owner(message.author) and message.content.lower().startswith("jarvis")
+
+    # Respond logic (ping or keyword for owner)
+    if bot.user in message.mentions or owner_trigger:
         userq = message.clean_content.replace(f"@{bot.user.name}", "").strip()
 
         # Save memory
         await save_memory(message.author.id, message.channel.id, f"{message.author.display_name}: {userq}")
 
-        # Get recent memory
+        # Get memory
         mem = await get_memory(message.channel.id)
         mem_text = "\n".join([f"{uid}: {c}" for uid, c in mem])
 
-        # Get user preference
+        # Preference
         pref = await get_pref(message.author.id)
 
         system = (
@@ -222,20 +237,9 @@ async def on_message(message: discord.Message):
             "Be professional, witty, concise. Use memory context. "
             "Never expose confidential info."
         )
-        reply = await ai_reply(system, f"Memory:\n{mem_text}\n\nUser: {userq}")
+        reply = await ai_stream_reply(system, f"Memory:\n{mem_text}\n\nUser: {userq}", message.channel)
 
-        if is_owner(message.author):
-            reply = f"Yes, sir. {reply}"
-        elif pref:
-            reply = f"Yes, {pref}. {reply}"
-        else:
-            reply = f"{reply}\n\n💡 I am Tony Stark's personal assistant."
-
-        reply = reply.replace("@everyone", "`@everyone`").replace("@here", "`@here`")
-        await message.reply(reply[:1900])
-
-        # Speak if connected to VC
-        if message.guild.voice_client:
+        if reply and message.guild.voice_client:
             await tts_speak(reply, message.guild.voice_client)
 
     await bot.process_commands(message)
