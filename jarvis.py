@@ -175,8 +175,11 @@ async def on_ready():
     )
     print(f"✅ Jarvis online as {bot.user}")
     try:
-        synced = await bot.tree.sync()
-        print(f"✅ Synced {len(synced)} commands")
+        # Sync commands instantly to your main guild (replace with your guild ID)
+        GUILD_ID = 1324117813878718474  # your main server ID
+        guild = discord.Object(id=GUILD_ID)
+        synced = await bot.tree.sync(guild=guild)
+        print(f"✅ Synced {len(synced)} guild commands")
     except Exception as e:
         print(f"❌ Sync error: {e}")
 
