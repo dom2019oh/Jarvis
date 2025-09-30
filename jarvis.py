@@ -1,5 +1,4 @@
 import os
-import sys
 import time
 import tempfile
 import sqlite3
@@ -8,11 +7,10 @@ import aiosqlite
 from discord.ext import commands, tasks
 from discord import app_commands, FFmpegPCMAudio
 from openai import OpenAI
-from datetime import timedelta
 
-# ==========================
-# CONFIGURATION
-# ==========================
+# =======================
+# CONFIG
+# =======================
 TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = 1176071547476262986
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -30,19 +28,18 @@ start_time = time.time()
 
 DB_FILE = "memory.db"
 
-# Channels
-INVITE_LOG_CHANNEL_ID = 1422164192156454932  # Invite logs (unchanged)
-MOD_LOG_CHANNEL_ID = 1422571435762909234     # New moderation logs
+# Channel IDs
+INVITE_LOG_CHANNEL_ID = 1422164192156454932   # Invite logs
+MOD_LOG_CHANNEL_ID = 1422571435762909234      # Mod actions
 
-# Globals
-last_role_channel = None
-sleeping_channels = set()
-global_kill_switch = False
 invite_cache = {}
+last_role_channel = None
+global_kill_switch = False
 
-# ==========================
+
+# =======================
 # DATABASE
-# ==========================
+# =======================
 def reset_bad_db():
     if os.path.exists(DB_FILE):
         try:
@@ -51,6 +48,8 @@ def reset_bad_db():
             conn.close()
         except sqlite3.DatabaseError:
             os.remove(DB_FILE)
+            print("⚠️ Corrupted DB deleted, rebuilding...")
+
 
 async def init_db():
     async with aiosqlite.connect(DB_FILE) as db:
@@ -66,8 +65,7 @@ async def init_db():
         await db.execute("""
             CREATE TABLE IF NOT EXISTS user_prefs (
                 user_id INTEGER PRIMARY KEY,
-                preferred_title TEXT,
-                style_notes TEXT
+                preferred_title TEXT
             )
         """)
         await db.execute("""
@@ -77,12 +75,35 @@ async def init_db():
             )
         """)
         await db.commit()
+    print("✅ Database initialized.")
 
-# ==========================
-# HELPERS
-# ==========================
-def is_owner(user: discord.abc.User) -> bool:
-    return user.id == OWNER_ID
+
+async def save_memory(user_id: int, channel_id: int, content: str):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute(
+            "INSERT INTO memory (user_id, channel_id, content) VALUES (?, ?, ?)",
+            (user_id, channel_id, content),
+        )
+        await db.commit()
+
+
+async def get_pref(user_id: int):
+    async with aiosqlite.connect(DB_FILE) as db:
+        async with db.execute(
+            "SELECT preferred_title FROM user_prefs WHERE user_id=?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+
+async def set_pref(user_id: int, title: str):
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO user_prefs (user_id, preferred_title) VALUES (?, ?)",
+            (user_id, title),
+        )
+        await db.commit()
+
 
 async def set_primary_guild(guild_id: int):
     async with aiosqlite.connect(DB_FILE) as db:
@@ -92,25 +113,60 @@ async def set_primary_guild(guild_id: int):
         )
         await db.commit()
 
+
 async def get_primary_guild():
     async with aiosqlite.connect(DB_FILE) as db:
         async with db.execute("SELECT value FROM settings WHERE key=?", ("primary_guild",)) as cursor:
             row = await cursor.fetchone()
             return int(row[0]) if row else None
 
-async def log_mod_action(guild, title, fields: dict):
+
+# =======================
+# AI
+# =======================
+async def ai_reply(system_prompt: str, user_prompt: str) -> str:
+    if not oai:
+        return "⚠️ OpenAI not configured."
+    try:
+        resp = oai.responses.create(
+            model=OPENAI_MODEL,
+            input=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        )
+        for item in resp.output:
+            if item.type == "message":
+                return "".join(
+                    [part.text for part in item.content if getattr(part, "type", "") == "output_text"]
+                )
+        return "✅ Done."
+    except Exception as e:
+        return f"❌ AI error: {e}"
+
+
+# =======================
+# HELPERS
+# =======================
+def is_owner(user: discord.abc.User) -> bool:
+    return user.id == OWNER_ID
+
+
+async def log_mod_action(guild, action, target, reason, moderator):
     log_channel = guild.get_channel(MOD_LOG_CHANNEL_ID)
     if not log_channel:
         return
-    embed = discord.Embed(title=title, color=discord.Color.dark_red())
-    for name, value in fields.items():
-        embed.add_field(name=name, value=value, inline=False)
+    embed = discord.Embed(title=f"{action}", color=discord.Color.red())
+    embed.add_field(name="Target", value=f"{target} (`{target.id}`)", inline=False)
+    embed.add_field(name="Reason", value=reason, inline=False)
+    embed.add_field(name="Moderator", value=f"{moderator} (`{moderator.id}`)", inline=False)
     embed.timestamp = discord.utils.utcnow()
     await log_channel.send(embed=embed)
 
-# ==========================
+
+# =======================
 # EVENTS
-# ==========================
+# =======================
 @bot.event
 async def on_ready():
     reset_bad_db()
@@ -119,12 +175,6 @@ async def on_ready():
         activity=discord.Activity(type=discord.ActivityType.watching, name="Stark Discoveries")
     )
     print(f"✅ Jarvis online as {bot.user}")
-    try:
-        guild = discord.Object(id=1324117813878718474)
-        synced = await bot.tree.sync(guild=guild)
-        print(f"✅ Synced {len(synced)} guild commands")
-    except Exception as e:
-        print(f"❌ Sync error: {e}")
 
     for guild in bot.guilds:
         try:
@@ -132,22 +182,18 @@ async def on_ready():
             invite_cache[guild.id] = {invite.code: invite.uses for invite in invites}
         except:
             pass
-    auto_update_roles.start()
 
-# Invite tracking (old logs unchanged)
+
 @bot.event
 async def on_member_join(member: discord.Member):
-    primary_guild = await get_primary_guild()
-    if primary_guild and member.guild.id != primary_guild:
-        return
-
     guild = member.guild
     invites_before = invite_cache.get(guild.id, {})
+
     try:
         invites_after = await guild.invites()
         invite_cache[guild.id] = {invite.code: invite.uses for invite in invites_after}
     except:
-        return
+        invites_after = []
 
     used_invite = None
     for invite in invites_after:
@@ -161,160 +207,173 @@ async def on_member_join(member: discord.Member):
 
     embed = discord.Embed(title="Invite Used", color=discord.Color.blue())
     embed.add_field(name="User Joined", value=f"{member} (`{member.id}`)", inline=False)
+
     if used_invite:
-        embed.add_field(name="Invite Code", value=used_invite.code, inline=True)
-        embed.add_field(name="Invite Creator", value=f"{used_invite.inviter}", inline=True)
+        embed.add_field(
+            name="Invite",
+            value=f"Code: `{used_invite.code}`\nInviter: {used_invite.inviter} (`{used_invite.inviter.id}`)",
+            inline=False
+        )
         embed.add_field(name="Uses", value=str(used_invite.uses), inline=True)
+    else:
+        embed.add_field(name="Invite", value="Could not detect invite (vanity/expired?)", inline=False)
+
+    account_age_days = (discord.utils.utcnow() - member.created_at).days
+    if account_age_days < 1:
+        risk_note = "High Risk: Account less than 24h old!"
+    elif account_age_days < 7:
+        risk_note = "Possible Alt: Account less than 7 days old."
+    else:
+        risk_note = "Looks safe."
+
+    embed.add_field(name="Account Age", value=f"{account_age_days} days old\n{risk_note}", inline=False)
+    embed.add_field(name="Joined At", value=discord.utils.format_dt(member.joined_at, style='F'), inline=False)
     embed.timestamp = discord.utils.utcnow()
     await log_channel.send(embed=embed)
 
-# ==========================
-# MODERATION ACTIONS
-# ==========================
+
 @bot.event
 async def on_message(message: discord.Message):
-    global global_kill_switch
     if message.author.bot:
         return
 
     content_lower = message.content.lower()
 
-    # Owner-only moderation
-    if is_owner(message.author) and content_lower.startswith("jarvis"):
-        if "ban" in content_lower:
+    # Owner forced actions
+    if is_owner(message.author):
+        if content_lower.startswith("jarvis ban"):
             if message.mentions:
                 target = message.mentions[0]
-                reason = "No reason provided"
-                if "for " in content_lower:
-                    reason = message.content.split("for", 1)[1].strip()
+                reason = message.content.split("for", 1)[1].strip() if "for" in content_lower else "No reason"
                 try:
-                    await message.guild.ban(target, reason=reason, delete_message_days=7)
-                    await log_mod_action(message.guild, "BAN EXECUTED", {
-                        "Target": f"{target} ({target.id})",
-                        "Moderator": f"{message.author} ({message.author.id})",
-                        "Reason": reason
-                    })
-                except Exception as e:
-                    await message.channel.send(f"Failed to ban: {e}")
+                    await target.send(f"You have been banned from {message.guild.name}.\nReason: {reason}\nAppeal: https://discord.gg/EWdaUdPvvK")
+                except:
+                    pass
+                await message.guild.ban(target, reason=reason, delete_message_days=1)
+                await log_mod_action(message.guild, "Ban", target, reason, message.author)
+                await message.channel.send(f"Ban executed on {target}")
             return
 
-        if "kick" in content_lower:
+        if content_lower.startswith("jarvis unban"):
+            try:
+                user_id = int(message.content.split()[2])
+                user = await bot.fetch_user(user_id)
+                await message.guild.unban(user, reason="Owner directive")
+                await log_mod_action(message.guild, "Unban", user, "Owner directive", message.author)
+                await message.channel.send(f"Unbanned {user}")
+            except:
+                await message.channel.send("Failed to unban. Check syntax.")
+            return
+
+        if content_lower.startswith("jarvis warn"):
             if message.mentions:
                 target = message.mentions[0]
-                reason = "No reason provided"
-                if "for " in content_lower:
-                    reason = message.content.split("for", 1)[1].strip()
-                try:
-                    await message.guild.kick(target, reason=reason)
-                    await log_mod_action(message.guild, "KICK EXECUTED", {
-                        "Target": f"{target} ({target.id})",
-                        "Moderator": f"{message.author} ({message.author.id})",
-                        "Reason": reason
-                    })
-                except Exception as e:
-                    await message.channel.send(f"Failed to kick: {e}")
+                reason = message.content.split("for", 1)[1].strip() if "for" in content_lower else "No reason"
+                await log_mod_action(message.guild, "Warn", target, reason, message.author)
+                await message.channel.send(f"Warned {target}")
             return
 
-        if "warn" in content_lower:
+        if content_lower.startswith("jarvis mute"):
             if message.mentions:
                 target = message.mentions[0]
-                reason = "No reason provided"
-                if "for " in content_lower:
-                    reason = message.content.split("for", 1)[1].strip()
-                await log_mod_action(message.guild, "WARNING ISSUED", {
-                    "Target": f"{target} ({target.id})",
-                    "Moderator": f"{message.author} ({message.author.id})",
-                    "Reason": reason
-                })
+                reason = "Muted"
+                mute_role = discord.utils.get(message.guild.roles, name="Muted")
+                if mute_role:
+                    await target.add_roles(mute_role, reason=reason)
+                await log_mod_action(message.guild, "Mute", target, reason, message.author)
+                await message.channel.send(f"Muted {target}")
             return
 
-        if "mute" in content_lower:
+        if content_lower.startswith("jarvis kick"):
             if message.mentions:
                 target = message.mentions[0]
-                duration = None
-                reason = "No reason provided"
-                if "for " in content_lower:
-                    reason = message.content.split("for", 1)[1].strip()
-                await log_mod_action(message.guild, "MUTE APPLIED", {
-                    "Target": f"{target} ({target.id})",
-                    "Moderator": f"{message.author} ({message.author.id})",
-                    "Duration": duration or "Permanent",
-                    "Reason": reason
-                })
+                reason = message.content.split("for", 1)[1].strip() if "for" in content_lower else "No reason"
+                await target.kick(reason=reason)
+                await log_mod_action(message.guild, "Kick", target, reason, message.author)
+                await message.channel.send(f"Kicked {target}")
             return
 
-        if "purge" in content_lower:
-            parts = content_lower.split()
-            amount = 10
-            for word in parts:
-                if word.isdigit():
-                    amount = int(word)
-            deleted = await message.channel.purge(limit=amount)
-            await log_mod_action(message.guild, "PURGE EXECUTED", {
-                "Moderator": f"{message.author} ({message.author.id})",
-                "Deleted": str(len(deleted)),
-                "Channel": f"{message.channel.name}"
-            })
+        if content_lower.startswith("jarvis purge"):
+            try:
+                count = int(message.content.split()[2])
+                deleted = await message.channel.purge(limit=count)
+                await message.channel.send(f"Purged {len(deleted)} messages")
+                await log_mod_action(message.guild, "Purge", message.author, f"{len(deleted)} messages", message.author)
+            except:
+                await message.channel.send("Failed purge. Syntax: Jarvis purge <count>")
             return
 
-        if "lockdown" in content_lower:
-            overwrite = message.channel.overwrites_for(message.guild.default_role)
-            overwrite.send_messages = False
-            await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-            await log_mod_action(message.guild, "LOCKDOWN", {
-                "Moderator": f"{message.author} ({message.author.id})",
-                "Channel": message.channel.name
-            })
+        if content_lower.startswith("jarvis lockdown"):
+            for channel in message.guild.channels:
+                if isinstance(channel, discord.TextChannel):
+                    await channel.set_permissions(message.guild.default_role, send_messages=False)
+            await log_mod_action(message.guild, "Lockdown", message.guild, "All channels locked", message.author)
+            await message.channel.send("Server is now in lockdown.")
             return
 
-        if "unlock" in content_lower:
-            overwrite = message.channel.overwrites_for(message.guild.default_role)
-            overwrite.send_messages = True
-            await message.channel.set_permissions(message.guild.default_role, overwrite=overwrite)
-            await log_mod_action(message.guild, "UNLOCK", {
-                "Moderator": f"{message.author} ({message.author.id})",
-                "Channel": message.channel.name
-            })
-            return
-
-        if "move" in content_lower:
-            if message.mentions:
+        if content_lower.startswith("jarvis move"):
+            if len(message.mentions) >= 1:
                 target = message.mentions[0]
-                for vc in message.guild.voice_channels:
-                    if vc.name.lower() in content_lower:
-                        try:
-                            await target.move_to(vc)
-                            await log_mod_action(message.guild, "USER MOVED", {
-                                "Target": f"{target} ({target.id})",
-                                "Moderator": f"{message.author} ({message.author.id})",
-                                "Destination": vc.name
-                            })
-                        except Exception as e:
-                            await message.channel.send(f"Failed to move: {e}")
+                args = message.content.split()
+                if len(args) >= 4:
+                    vc_id = int(args[3])
+                    vc = message.guild.get_channel(vc_id)
+                    if isinstance(vc, discord.VoiceChannel):
+                        await target.move_to(vc)
+                        await log_mod_action(message.guild, "Move", target, f"Moved to {vc.name}", message.author)
+                        await message.channel.send(f"Moved {target} to {vc.name}")
             return
+
+    # Passive AI responses
+    if "jarvis" in content_lower or bot.user in message.mentions:
+        history = []
+        async for msg in message.channel.history(limit=6, oldest_first=False):
+            if not msg.author.bot:
+                history.append(f"{msg.author.display_name}: {msg.content}")
+        history_text = "\n".join(history[::-1])
+
+        await save_memory(message.author.id, message.channel.id, f"{message.author.display_name}: {message.content}")
+        pref = await get_pref(message.author.id)
+
+        system = "You are J.A.R.V.I.S., Tony Stark's AI assistant. Reply professionally and use context."
+        reply = await ai_reply(system, f"Context:\n{history_text}\n\nUser: {message.content}")
+
+        if is_owner(message.author):
+            reply = f"Yes, sir. {reply}"
+        elif pref:
+            reply = f"Yes, {pref}. {reply}"
+
+        await message.reply(reply[:1900])
 
     await bot.process_commands(message)
 
-# ==========================
-# TASKS
-# ==========================
-@tasks.loop(hours=3)
-async def auto_update_roles():
-    global last_role_channel
-    if last_role_channel is None:
-        return
-    try:
-        guild = last_role_channel.guild
-        roles = guild.roles[::-1]
-        formatted = "\n\n".join([f"**{r.name}** — `{r.id}`" for r in roles])
-        chunks = [formatted[i:i+1900] for i in range(0, len(formatted), 1900)]
-        await last_role_channel.send("Auto-refreshed Role IDs:")
-        for c in chunks:
-            await last_role_channel.send(c)
-    except Exception as e:
-        print(f"Auto-update failed: {e}")
 
-# ==========================
+# =======================
+# SLASH COMMANDS
+# =======================
+@bot.tree.command(name="setpref", description="Set your preferred title")
+async def setpref_cmd(interaction: discord.Interaction, title: str):
+    await set_pref(interaction.user.id, title)
+    await interaction.response.send_message(f"Got it. I’ll call you **{title}**.")
+
+@bot.tree.command(name="database-check", description="Run a background/alt check")
+async def database_check(interaction: discord.Interaction, user: discord.Member):
+    account_age_days = (discord.utils.utcnow() - user.created_at).days
+    if account_age_days < 1:
+        risk_note = "High Risk: Account less than 24h old!"
+    elif account_age_days < 7:
+        risk_note = "Possible Alt: Account less than 7 days old."
+    else:
+        risk_note = "Looks safe."
+
+    embed = discord.Embed(title="Database Check", color=discord.Color.orange())
+    embed.add_field(name="User", value=f"{user} (`{user.id}`)", inline=False)
+    embed.add_field(name="Account Age", value=f"{account_age_days} days old\n{risk_note}", inline=False)
+    embed.add_field(name="Joined At", value=discord.utils.format_dt(user.joined_at, style='F'), inline=False)
+    await interaction.response.send_message(embed=embed)
+
+
+# =======================
 # RUN
-# ==========================
+# =======================
 bot.run(TOKEN)
