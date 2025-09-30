@@ -260,6 +260,55 @@ async def on_message(message: discord.Message):
         await message.channel.send(f"✅ Marked **{message.guild.name}** as my primary guild. I’ll ignore all others, sir.")
         return
 
+    # 🚨 Owner Direct Ban Command (instant execution)
+    if is_owner(message.author) and content_lower.startswith("jarvis") and "ban " in content_lower:
+        target = None
+        reason = "No reason provided"
+        purge_days = 7  # Default purge history (set to 0 if you don't want to delete messages)
+
+        if "for " in content_lower:
+            reason = message.content.split("for", 1)[1].strip()
+
+        if message.mentions:
+            target = message.mentions[0]
+
+        if target:
+            try:
+                # DM the user about the ban
+                try:
+                    await target.send(
+                        f"You have been **banned** from {message.guild.name}.\n"
+                        f"Reason: {reason}\n"
+                        f"Appeal here: https://lsrpnetwork.com/appeal"
+                    )
+                except:
+                    pass
+
+                # Execute the ban
+                await message.guild.ban(
+                    target,
+                    reason=f"Ordered by Owner ({message.author}) — {reason}",
+                    delete_message_days=purge_days
+                )
+
+                # Log to mod-log
+                log_channel = message.guild.get_channel(INVITE_LOG_CHANNEL_ID)  # Or change to your mod-log channel
+                if log_channel:
+                    embed = discord.Embed(title="🚨 Immediate Ban Executed", color=discord.Color.red())
+                    embed.add_field(name="Target", value=f"{target} (`{target.id}`)", inline=False)
+                    embed.add_field(name="Reason", value=reason, inline=True)
+                    embed.add_field(name="Ordered by", value=f"{message.author} (`{message.author.id}`)", inline=True)
+                    embed.add_field(name="Messages Purged", value=str(purge_days), inline=True)
+                    embed.timestamp = discord.utils.utcnow()
+                    await log_channel.send(embed=embed)
+
+                await message.channel.send(f"✅ Executed ban on {target} immediately, sir.")
+
+            except Exception as e:
+                await message.channel.send(f"❌ Failed to ban: {e}")
+
+        return
+
     # Kill switch reactivation
     if global_kill_switch and ("tony stark" in content_lower or "pepper" in content_lower):
         global_kill_switch = False
