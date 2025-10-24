@@ -41,6 +41,10 @@ IMPORTANT_KEYWORDS = ["error", "crash", "issue", "bug", "help", "setup", "urgent
 last_response_time = 0
 RESPONSE_COOLDOWN = 60  # seconds between automated responses
 
+# Conversation tracking
+last_jarvis_message = {}  # channel_id -> (timestamp, user_id)
+CONVERSATION_WINDOW = 60  # seconds allowed for follow-up messages
+
 
 # =======================
 # DATABASE
@@ -255,15 +259,26 @@ async def on_member_join(member: discord.Member):
 
 @bot.event
 async def on_message(message: discord.Message):
-    global last_response_time
+    global last_response_time, last_jarvis_message
 
     if message.author.bot:
         return
 
+    now = time.time()
     content_lower = message.content.lower()
 
+    # Determine if this message is a follow-up conversation
+    is_follow_up = False
+    if message.reference and message.reference.resolved:
+        if message.reference.resolved.author == bot.user:
+            is_follow_up = True
+    else:
+        if message.channel.id in last_jarvis_message:
+            last_time, last_user = last_jarvis_message[message.channel.id]
+            if now - last_time < CONVERSATION_WINDOW and last_user == message.author.id:
+                is_follow_up = True
+
     # Speak when necessary (keyword-based)
-    now = time.time()
     if any(word in content_lower for word in IMPORTANT_KEYWORDS):
         if now - last_response_time > RESPONSE_COOLDOWN:
             last_response_time = now
@@ -359,8 +374,8 @@ async def on_message(message: discord.Message):
                         await message.channel.send(f"Moved {target} to {vc.name}")
             return
 
-    # Passive AI responses when mentioned
-    if "jarvis" in content_lower or bot.user in message.mentions:
+    # Passive AI responses when mentioned or follow-up
+    if "jarvis" in content_lower or bot.user in message.mentions or is_follow_up:
         async with message.channel.typing():
             history = []
             async for msg in message.channel.history(limit=6, oldest_first=False):
@@ -371,7 +386,7 @@ async def on_message(message: discord.Message):
             await save_memory(message.author.id, message.channel.id, f"{message.author.display_name}: {message.content}")
             pref = await get_pref(message.author.id)
 
-            system = "You are J.A.R.V.I.S., Tony Stark's AI assistant. Reply professionally and use context."
+            system = "You are J.A.R.V.I.S., Tony Stark's AI assistant. Continue natural conversation when context fits."
             reply = await ai_reply(system, f"Context:\n{history_text}\n\nUser: {message.content}")
             reply = sanitize_reply(reply)
 
@@ -381,6 +396,7 @@ async def on_message(message: discord.Message):
                 reply = f"Yes, {pref}. {reply}"
 
             await message.reply(reply[:1900], mention_author=False)
+            last_jarvis_message[message.channel.id] = (time.time(), message.author.id)
 
     await bot.process_commands(message)
 
@@ -392,6 +408,7 @@ async def on_message(message: discord.Message):
 async def setpref_cmd(interaction: discord.Interaction, title: str):
     await set_pref(interaction.user.id, title)
     await interaction.response.send_message(f"Got it. I’ll call you **{title}**.")
+
 
 @bot.tree.command(name="database-check", description="Run a background/alt check")
 async def database_check(interaction: discord.Interaction, user: discord.Member):
@@ -408,6 +425,7 @@ async def database_check(interaction: discord.Interaction, user: discord.Member)
     embed.add_field(name="Account Age", value=f"{account_age_days} days old\n{risk_note}", inline=False)
     embed.add_field(name="Joined At", value=discord.utils.format_dt(user.joined_at, style='F'), inline=False)
     await interaction.response.send_message(embed=embed)
+
 
 @bot.tree.command(name="leave-guild", description="Make Jarvis leave a selected guild (owner only).")
 async def leave_guild(interaction: discord.Interaction, guild_id: str):
@@ -429,7 +447,7 @@ async def leave_guild(interaction: discord.Interaction, guild_id: str):
     await interaction.response.send_message(f"Leaving **{guild.name}** (`{guild.id}`)...", ephemeral=True)
     await guild.leave()
     print(f"👋 Jarvis left guild: {guild.name} ({guild.id}) by owner request.")
-    
+
 
 @bot.tree.command(name="list-guilds", description="List all guilds Jarvis is in (owner only).")
 async def list_guilds(interaction: discord.Interaction):
