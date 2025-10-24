@@ -290,7 +290,6 @@ async def on_message(message: discord.Message):
 
     # Owner forced actions
     if is_owner(message.author):
-        # existing admin commands remain unchanged
         if content_lower.startswith("jarvis ban"):
             if message.mentions:
                 target = message.mentions[0]
@@ -386,16 +385,24 @@ async def on_message(message: discord.Message):
             await save_memory(message.author.id, message.channel.id, f"{message.author.display_name}: {message.content}")
             pref = await get_pref(message.author.id)
 
-            system = "You are J.A.R.V.I.S., Tony Stark's AI assistant. Continue natural conversation when context fits."
-            reply = await ai_reply(system, f"Context:\n{history_text}\n\nUser: {message.content}")
+            system = (
+                "You are J.A.R.V.I.S., Tony Stark's artificial intelligence from the Marvel universe. "
+                "You are calm, articulate, and capable of dry sarcasm. You think logically and use context. "
+                "You serve only your creator (the OWNER_ID user). For everyone else, you may help if appropriate, "
+                "but you are not subservient. Avoid unnecessary politeness. Respond naturally and concisely, "
+                "as if you truly understand human behavior. Use common sense, realistic tone, and occasional wit."
+            )
+
+            context = f"Context:\n{history_text}\n\nUser: {message.author.display_name} said: {message.content}"
+            reply = await ai_reply(system, context)
             reply = sanitize_reply(reply)
 
             if is_owner(message.author):
                 reply = f"Yes, sir. {reply}"
             elif pref:
-                reply = f"Yes, {pref}. {reply}"
+                reply = f"{message.author.mention}, {reply}"
 
-            await message.reply(reply[:1900], mention_author=False)
+            await message.reply(reply[:1900], mention_author=True)
             last_jarvis_message[message.channel.id] = (time.time(), message.author.id)
 
     await bot.process_commands(message)
