@@ -407,10 +407,29 @@ async def list_guilds(interaction: discord.Interaction):
         await interaction.response.send_message("Access denied.", ephemeral=True)
         return
 
-    lines = [f"{g.name} — {g.id} ({len(g.members)} members)" for g in bot.guilds]
-    msg = "\n".join(lines) or "No guilds found."
-    await interaction.user.send(f"**Guilds Jarvis is in:**\n{msg}")
-    await interaction.response.send_message("Sent you a DM with the list.", ephemeral=True)
+    # Build the embed
+    embed = discord.Embed(
+        title="🤖 Guilds Jarvis is in:",
+        color=discord.Color.blurple()
+    )
+
+    # Numbered list of guilds
+    for i, g in enumerate(bot.guilds, start=1):
+        embed.add_field(
+            name=f"{i}. {g.name}",
+            value=f"🆔 `{g.id}` | 👥 **{len(g.members)} members**",
+            inline=False
+        )
+
+    embed.set_footer(text=f"Total Guilds: {len(bot.guilds)}")
+    embed.timestamp = discord.utils.utcnow()
+
+    # Send the embed as a DM (to keep things private)
+    try:
+        await interaction.user.send(embed=embed)
+        await interaction.response.send_message("✅ Sent you a DM with the guild list.", ephemeral=True)
+    except discord.Forbidden:
+        await interaction.response.send_message("I couldn’t DM you. Please enable DMs.", ephemeral=True)
 
 # =======================
 # RUN
