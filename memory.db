@@ -2,6 +2,7 @@ import aiosqlite
 
 async def init_db():
     async with aiosqlite.connect("memory.db") as db:
+        # Basic chat log
         await db.execute("""
             CREATE TABLE IF NOT EXISTS memory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -11,6 +12,8 @@ async def init_db():
                 content TEXT
             )
         """)
+
+        # Preferences per user
         await db.execute("""
             CREATE TABLE IF NOT EXISTS user_prefs (
                 user_id INTEGER PRIMARY KEY,
@@ -18,4 +21,28 @@ async def init_db():
                 style_notes TEXT
             )
         """)
+
+        # Categorized knowledge storage (context, summaries, etc.)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge_archive (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                topic TEXT,
+                summary TEXT,
+                source TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Interaction history — track what Jarvis says and when
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS interaction_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                prompt TEXT,
+                reply TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         await db.commit()
+        print("✅ memory.db expanded with long-term storage.")
