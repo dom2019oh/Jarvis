@@ -176,13 +176,19 @@ async def on_ready():
     )
     print(f"✅ Jarvis online as {bot.user}")
 
+    # Force global slash command sync
+    try:
+        synced = await bot.tree.sync()
+        print(f"☑️ Synced {len(synced)} global command(s) across all guilds.")
+    except Exception as e:
+        print(f"❌ Command sync failed: {e}")
+
     for guild in bot.guilds:
         try:
             invites = await guild.invites()
             invite_cache[guild.id] = {invite.code: invite.uses for invite in invites}
         except:
             pass
-
 
 @bot.event
 async def on_member_join(member: discord.Member):
