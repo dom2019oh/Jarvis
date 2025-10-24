@@ -36,6 +36,11 @@ invite_cache = {}
 last_role_channel = None
 global_kill_switch = False
 
+# Jarvis awareness and cooldown
+IMPORTANT_KEYWORDS = ["error", "crash", "issue", "bug", "help", "setup", "urgent"]
+last_response_time = 0
+RESPONSE_COOLDOWN = 60  # seconds between automated responses
+
 
 # =======================
 # DATABASE
@@ -152,6 +157,15 @@ def is_owner(user: discord.abc.User) -> bool:
     return user.id == OWNER_ID
 
 
+def sanitize_reply(text: str) -> str:
+    """Prevent Jarvis from pinging users or everyone."""
+    return (
+        text.replace("@everyone", "[everyone]")
+            .replace("@here", "[here]")
+            .replace("<@", "[mention blocked]")
+    )
+
+
 async def log_mod_action(guild, action, target, reason, moderator):
     log_channel = guild.get_channel(MOD_LOG_CHANNEL_ID)
     if not log_channel:
@@ -189,6 +203,7 @@ async def on_ready():
             invite_cache[guild.id] = {invite.code: invite.uses for invite in invites}
         except:
             pass
+
 
 @bot.event
 async def on_member_join(member: discord.Member):
@@ -240,13 +255,27 @@ async def on_member_join(member: discord.Member):
 
 @bot.event
 async def on_message(message: discord.Message):
+    global last_response_time
+
     if message.author.bot:
         return
 
     content_lower = message.content.lower()
 
+    # Speak when necessary (keyword-based)
+    now = time.time()
+    if any(word in content_lower for word in IMPORTANT_KEYWORDS):
+        if now - last_response_time > RESPONSE_COOLDOWN:
+            last_response_time = now
+            async with message.channel.typing():
+                system = "You are J.A.R.V.I.S., Tony Stark's AI assistant. Step in only when context is important or technical."
+                reply = await ai_reply(system, message.content)
+                reply = sanitize_reply(reply)
+                await message.reply(reply[:1900], mention_author=False)
+
     # Owner forced actions
     if is_owner(message.author):
+        # existing admin commands remain unchanged
         if content_lower.startswith("jarvis ban"):
             if message.mentions:
                 target = message.mentions[0]
@@ -330,26 +359,28 @@ async def on_message(message: discord.Message):
                         await message.channel.send(f"Moved {target} to {vc.name}")
             return
 
-    # Passive AI responses
+    # Passive AI responses when mentioned
     if "jarvis" in content_lower or bot.user in message.mentions:
-        history = []
-        async for msg in message.channel.history(limit=6, oldest_first=False):
-            if not msg.author.bot:
-                history.append(f"{msg.author.display_name}: {msg.content}")
-        history_text = "\n".join(history[::-1])
+        async with message.channel.typing():
+            history = []
+            async for msg in message.channel.history(limit=6, oldest_first=False):
+                if not msg.author.bot:
+                    history.append(f"{msg.author.display_name}: {msg.content}")
+            history_text = "\n".join(history[::-1])
 
-        await save_memory(message.author.id, message.channel.id, f"{message.author.display_name}: {message.content}")
-        pref = await get_pref(message.author.id)
+            await save_memory(message.author.id, message.channel.id, f"{message.author.display_name}: {message.content}")
+            pref = await get_pref(message.author.id)
 
-        system = "You are J.A.R.V.I.S., Tony Stark's AI assistant. Reply professionally and use context."
-        reply = await ai_reply(system, f"Context:\n{history_text}\n\nUser: {message.content}")
+            system = "You are J.A.R.V.I.S., Tony Stark's AI assistant. Reply professionally and use context."
+            reply = await ai_reply(system, f"Context:\n{history_text}\n\nUser: {message.content}")
+            reply = sanitize_reply(reply)
 
-        if is_owner(message.author):
-            reply = f"Yes, sir. {reply}"
-        elif pref:
-            reply = f"Yes, {pref}. {reply}"
+            if is_owner(message.author):
+                reply = f"Yes, sir. {reply}"
+            elif pref:
+                reply = f"Yes, {pref}. {reply}"
 
-        await message.reply(reply[:1900])
+            await message.reply(reply[:1900], mention_author=False)
 
     await bot.process_commands(message)
 
@@ -380,7 +411,6 @@ async def database_check(interaction: discord.Interaction, user: discord.Member)
 
 @bot.tree.command(name="leave-guild", description="Make Jarvis leave a selected guild (owner only).")
 async def leave_guild(interaction: discord.Interaction, guild_id: str):
-    # check if the user invoking is the owner
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message("Access denied. This command is restricted.", ephemeral=True)
         return
@@ -407,13 +437,11 @@ async def list_guilds(interaction: discord.Interaction):
         await interaction.response.send_message("Access denied.", ephemeral=True)
         return
 
-    # Build the embed
     embed = discord.Embed(
         title="🤖 Guilds Jarvis is in:",
         color=discord.Color.blurple()
     )
 
-    # Numbered list of guilds
     for i, g in enumerate(bot.guilds, start=1):
         embed.add_field(
             name=f"{i}. {g.name}",
@@ -424,7 +452,6 @@ async def list_guilds(interaction: discord.Interaction):
     embed.set_footer(text=f"Total Guilds: {len(bot.guilds)}")
     embed.timestamp = discord.utils.utcnow()
 
-    # Send the embed as a DM (to keep things private)
     try:
         await interaction.user.send(embed=embed)
         await interaction.response.send_message("✅ Sent you a DM with the guild list.", ephemeral=True)
