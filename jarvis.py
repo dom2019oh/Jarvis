@@ -372,6 +372,39 @@ async def database_check(interaction: discord.Interaction, user: discord.Member)
     embed.add_field(name="Joined At", value=discord.utils.format_dt(user.joined_at, style='F'), inline=False)
     await interaction.response.send_message(embed=embed)
 
+@bot.tree.command(name="leave-guild", description="Make Jarvis leave a selected guild (owner only).")
+async def leave_guild(interaction: discord.Interaction, guild_id: str):
+    # check if the user invoking is the owner
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("Access denied. This command is restricted.", ephemeral=True)
+        return
+
+    try:
+        gid = int(guild_id)
+    except ValueError:
+        await interaction.response.send_message("Guild ID must be numeric.", ephemeral=True)
+        return
+
+    guild = bot.get_guild(gid)
+    if not guild:
+        await interaction.response.send_message("I'm not currently in any guild with that ID.", ephemeral=True)
+        return
+
+    await interaction.response.send_message(f"Leaving **{guild.name}** (`{guild.id}`)...", ephemeral=True)
+    await guild.leave()
+    print(f"👋 Jarvis left guild: {guild.name} ({guild.id}) by owner request.")
+    
+
+@bot.tree.command(name="list-guilds", description="List all guilds Jarvis is in (owner only).")
+async def list_guilds(interaction: discord.Interaction):
+    if interaction.user.id != OWNER_ID:
+        await interaction.response.send_message("Access denied.", ephemeral=True)
+        return
+
+    lines = [f"{g.name} — {g.id} ({len(g.members)} members)" for g in bot.guilds]
+    msg = "\n".join(lines) or "No guilds found."
+    await interaction.user.send(f"**Guilds Jarvis is in:**\n{msg}")
+    await interaction.response.send_message("Sent you a DM with the list.", ephemeral=True)
 
 # =======================
 # RUN
