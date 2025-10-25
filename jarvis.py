@@ -294,13 +294,60 @@ async def on_message(message: discord.Message):
             if message.mentions:
                 target = message.mentions[0]
                 reason = message.content.split("for", 1)[1].strip() if "for" in content_lower else "No reason"
+
+                # DM embed to banned user
                 try:
-                    await target.send(f"You have been banned from {message.guild.name}.\nReason: {reason}\nAppeal: https://discord.gg/EWdaUdPvvK")
+                    dm_embed = discord.Embed(
+                        title=f"You’ve been banned from {message.guild.name}",
+                        description=(
+                            f"**Reason:** {reason}\n"
+                            f"**Moderator:** {message.author.mention}\n\n"
+                            "If you believe this was a mistake, you may appeal below."
+                        ),
+                        color=discord.Color.red()
+                    )
+                    dm_embed.add_field(name="Appeal Link", value="[Join Appeal Server](https://discord.gg/EWdaUdPvvK)", inline=False)
+                    dm_embed.set_footer(text="Grant Roleplay Network | Enforcement Division")
+                    dm_embed.timestamp = discord.utils.utcnow()
+                    await target.send(embed=dm_embed)
                 except:
                     pass
+
+                # Perform ban
                 await message.guild.ban(target, reason=reason, delete_message_days=1)
+
+                # Log + public confirmation
                 await log_mod_action(message.guild, "Ban", target, reason, message.author)
-                await message.channel.send(f"Ban executed on {target}")
+                case_number = int(time.time() % 1000)
+                public_embed = discord.Embed(
+                    description=(
+                        f"✅ **Case #{case_number}** {target.mention} | **Member** has been banned.\n"
+                        f"**Reason:** {reason}\n"
+                        f"**Moderator:** {message.author.mention}"
+                    ),
+                    color=discord.Color.red()
+                )
+                public_embed.timestamp = discord.utils.utcnow()
+                await message.channel.send(embed=public_embed)
+            return
+
+        if content_lower.startswith("jarvis unban"):
+            try:
+                user_id = int(message.content.split()[2])
+                user = await bot.fetch_user(user_id)
+                await message.guild.unban(user, reason="Owner directive")
+                await log_mod_action(message.guild, "Unban", user, "Owner directive", message.author)
+                await message.channel.send(f"Unbanned {user}")
+            except:
+                await message.channel.send("Failed to unban. Check syntax.")
+            return
+
+        if content_lower.startswith("jarvis warn"):
+            if message.mentions:
+                target = message.mentions[0]
+                reason = message.content.split("for", 1)[1].strip() if "for" in content_lower else "No reason"
+                await log_mod_action(message.guild, "Warn", target, reason, message.author)
+                await message.channel.send(f"Warned {target}")
             return
 
         if content_lower.startswith("jarvis unban"):
