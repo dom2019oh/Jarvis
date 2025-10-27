@@ -2,6 +2,7 @@ import os
 import time
 import tempfile
 import sqlite3
+import asyncio  # for async status rotation
 import discord
 import aiosqlite
 from discord.ext import commands, tasks
@@ -187,12 +188,36 @@ async def log_mod_action(guild, action, target, reason, moderator):
 # =======================
 @bot.event
 async def on_ready():
-    reset_bad_db()
-    await init_db()
-    await bot.change_presence(
-        activity=discord.Activity(type=discord.ActivityType.watching, name="Grant Development")
-    )
-    print(f"✅ Jarvis online as {bot.user}")
+    statuses = [
+        # Playing Status
+        discord.Activity(
+            type=discord.ActivityType.playing,
+            name="<:your_emoji_here:000000000000000000> Grant Development ⚙️"
+        ),
+
+        # Watching Status
+        discord.Activity(
+            type=discord.ActivityType.watching,
+            name="<:your_emoji_here:000000000000000000> over system logs 👁️"
+        ),
+
+        # Listening Status
+        discord.Activity(
+            type=discord.ActivityType.listening,
+            name="<:your_emoji_here:000000000000000000> user feedback 🎧"
+        ),
+
+        # Streaming Status
+        discord.Streaming(
+            name="<:your_emoji_here:000000000000000000> Building Networks 🧠",
+            url="https://twitch.tv/yourchannel"  # must be Twitch/YouTube to show purple tag
+        )
+    ]
+
+    while True:
+        for status in statuses:
+            await bot.change_presence(activity=status, status=discord.Status.online)
+            await asyncio.sleep(60)  # change every 60 seconds
 
     # Force global slash command sync
     try:
