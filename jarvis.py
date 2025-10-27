@@ -192,24 +192,24 @@ async def on_ready():
         # Playing Status
         discord.Activity(
             type=discord.ActivityType.playing,
-            name="<:your_emoji_here:000000000000000000> Grant Development ⚙️"
+            name="<:your_emoji_here:000000000000000000> Grant Development."
         ),
 
         # Watching Status
         discord.Activity(
             type=discord.ActivityType.watching,
-            name="<:your_emoji_here:000000000000000000> over system logs 👁️"
+            name="<:your_emoji_here:000000000000000000> over system logs."
         ),
 
         # Listening Status
         discord.Activity(
             type=discord.ActivityType.listening,
-            name="<:your_emoji_here:000000000000000000> user feedback 🎧"
+            name="<:your_emoji_here:000000000000000000> user feedback."
         ),
 
         # Streaming Status
         discord.Streaming(
-            name="<:your_emoji_here:000000000000000000> Building Networks 🧠",
+            name="<:your_emoji_here:000000000000000000> Building Networks.",
             url="https://twitch.tv/yourchannel"  # must be Twitch/YouTube to show purple tag
         )
     ]
