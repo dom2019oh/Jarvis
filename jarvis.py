@@ -190,7 +190,7 @@ async def on_ready():
     reset_bad_db()
     await init_db()
     await bot.change_presence(
-        activity=discord.Activity(type=discord.ActivityType.watching, name="Stark Discoveries")
+        activity=discord.Activity(type=discord.ActivityType.watching, name="Grant Development")
     )
     print(f"✅ Jarvis online as {bot.user}")
 
